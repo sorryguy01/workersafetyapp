@@ -1,8 +1,11 @@
 'use strict';
 
 const path = require('path');
+const dotenv = require('dotenv');dotenv.config({ path: path.join(__dirname, '.env') });
+
 const http = require('http');
 const express = require('express');
+const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { Server } = require('socket.io');
 
