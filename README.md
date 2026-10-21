@@ -183,6 +183,24 @@ Incidents are de-duplicated per event type for 12 seconds.
 
 ---
 
+## Deploying to Render
+
+The repo ships a `render.yaml` Blueprint, so a deploy is one click:
+
+1. Open `https://render.com/deploy?repo=https://github.com/sorryguy01/workersafetyapp`
+2. Approve the Blueprint, then type values for `SEED_ADMIN_PASSWORD` and `SEED_OBSERVER_PASSWORD` when prompted.
+3. Render builds with `npm ci --omit=dev`, starts with `node server.js`, and health-checks `/api/health`.
+
+The Blueprint pins `NODE_VERSION=24`. The app stores data through Node's built-in `node:sqlite`
+module, which is compiled into the Node binary itself — there is **no** native npm package to build,
+so hosts with newer glibc no longer fail with `GLIBC_2.38 not found`.
+
+> Render's filesystem is ephemeral: `safety_logs.db` resets on every deploy or restart. That is fine
+> for a demo (accounts reseed automatically), but move to a managed database before keeping
+> production audit history.
+
+---
+
 ## Production checklist
 
 1. Serve over HTTPS (`COOKIE_SECURE=true`, TLS at a reverse proxy).
@@ -200,3 +218,4 @@ Incidents are de-duplicated per event type for 12 seconds.
 - This project is a safety-awareness demonstrator, not a certified life-safety system. Do not rely on it as the sole alarm path for hazardous work.
 - The bundled `safety_logs.db` may contain simulated incidents and audit records produced during validation. To start with a clean ledger, stop the server and remove `safety_logs.db`; accounts are reseeded on next boot.
 - The simulator auto-fallback is deliberate so the dashboard can be evaluated without an ESP32. The status badge never claims a hardware link when one does not exist.
+- Persistence uses Node's built-in `node:sqlite` (Node 24+). `serialport` is an optional dependency: if it is missing or fails to build, the app logs `serialport unavailable` in the status panel and stays in simulator mode instead of crashing.

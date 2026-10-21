@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: worker-safetyapp
+    runtime: node
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: node server.js
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      # node:sqlite (the database driver this app uses) ships inside Node 24+.
+      # Pinning here prevents the host from selecting a runtime without it.
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      # Empty SERIAL_PORT means pure simulator mode (no ESP32 attached).
+      - key: SERIAL_PORT
+        value: ""
+      - key: SERIAL_BAUD
+        value: "115200"
+      - key: SESSION_TTL_HOURS
+        value: "8"
+      # Render terminates TLS, so secure cookies and proxy trust are safe.
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: TRUST_PROXY
+        value: "true"
+      - key: SIM_AUTO_DEMO
+        value: "true"
+      # Prompts for a value on first deploy; never committed to the repo.
+      - key: SEED_ADMIN_PASSWORD
+        sync: false
+      - key: SEED_OBSERVER_PASSWORD
+        sync: false

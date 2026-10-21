@@ -9,7 +9,7 @@
     "set-password": "node scripts/set-password.js"
   },
   "engines": {
-    "node": "18.17.0"
+    "node": ">=24.0.0"
   },
   "keywords": [
     "esp32",
@@ -24,14 +24,14 @@
   "type": "commonjs",
   "private": true,
   "dependencies": {
-    "@serialport/parser-readline": "^13.0.0",
     "dotenv": "^18.0.8",
     "express": "^5.3.0",
     "express-rate-limit": "^8.7.1",
     "helmet": "^5.1.1",
-    "serialport": "^13.0.0",
-    "socket.io": "^4.8.4",
-    "sql.js": "^1.15.1",
-    "sqlite3": "^6.0.1"
+    "socket.io": "^4.8.4"
+  },
+  "optionalDependencies": {
+    "@serialport/parser-readline": "^13.0.0",
+    "serialport": "^13.0.0"
   }
 }

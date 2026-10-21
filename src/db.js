@@ -1,67 +1,94 @@
 'use strict';
 
 const path = require('path');
-const sqlite3 = require('sqlite3').verbose();
 const { EventEmitter } = require('events');
+const { DatabaseSync } = require('node:sqlite');
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'safety_logs.db');
 const events = new EventEmitter();
-const db = new sqlite3.Database(DB_PATH);
 
-let ready;
-const opened = new Promise((resolve, reject) => {
-  db.once('open', resolve);
-  db.once('error', reject);
-});
-ready = opened;
+/**
+ * Node's built-in SQLite (node:sqlite, Node >= 22.5) is compiled into the
+ * Node binary itself, so there is no native module to download or link.
+ * This removes the prebuilt-binary GLIBC mismatch that made the `sqlite3`
+ * package fail on hosts running newer Node builds.
+ */
+const db = new DatabaseSync(DB_PATH);
+
+function prepareAndRun(sql, params = []) {
+  const stmt = db.prepare(sql);
+  try {
+    const info = params.length ? stmt.run(...params) : stmt.run();
+    return {
+      lastID: Number(info.lastInsertRowid || 0),
+      changes: Number(info.changes || 0),
+    };
+  } finally {
+    stmt.close();
+  }
+}
+
+function prepareAndAll(sql, params = []) {
+  const stmt = db.prepare(sql);
+  try {
+    const rows = params.length ? stmt.all(...params) : stmt.all();
+    return rows.map((row) => ({ ...row }));
+  } finally {
+    stmt.close();
+  }
+}
+
+function prepareAndGet(sql, params = []) {
+  const stmt = db.prepare(sql);
+  try {
+    const row = params.length ? stmt.get(...params) : stmt.get();
+    return row ? { ...row } : null;
+  } finally {
+    stmt.close();
+  }
+}
+
+/**
+ * Statement-less helper for schema/DDL statements that cannot be prepared
+ * with bound parameters (multiple statements, PRAGMA ... = value, etc).
+ */
+function exec(sql) {
+  db.exec(sql);
+  return { lastID: 0, changes: 0 };
+}
 
 function all(sql, params = []) {
-  return ready.then(
-    () =>
-      new Promise((resolve, reject) => {
-        db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows)));
-      })
-  );
+  return prepareAndAll(sql, params);
 }
 
 function get(sql, params = []) {
-  return ready.then(
-    () =>
-      new Promise((resolve, reject) => {
-        db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row)));
-      })
-  );
+  return prepareAndGet(sql, params);
 }
 
 function run(sql, params = []) {
-  return ready.then(
-    () =>
-      new Promise((resolve, reject) => {
-        db.run(sql, params, function onRun(err) {
-          if (err) return reject(err);
-          resolve({ lastID: this.lastID, changes: this.changes });
-        });
-      })
-  );
+  if (!params.length && /^\s*(CREATE|ALTER|DROP|PRAGMA|BEGIN|COMMIT|ROLLBACK|UPDATE|DELETE)\b/i.test(sql)) {
+    return exec(sql);
+  }
+  return prepareAndRun(sql, params);
 }
 
-async function columns(table) {
-  const rows = await all(`PRAGMA table_info(${table})`);
+function columnsOf(table) {
+  const rows = prepareAndAll(`PRAGMA table_info(${table})`);
   return new Set(rows.map((row) => row.name));
 }
 
-async function addColumn(table, name, definition) {
-  const existing = await columns(table);
+function addColumn(table, name, definition) {
+  const existing = columnsOf(table);
   if (!existing.has(name)) {
-    await run(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
   }
 }
 
 async function migrate() {
-  await run('PRAGMA journal_mode = WAL');
-  await run('PRAGMA foreign_keys = ON');
+  db.exec('PRAGMA journal_mode = WAL');
+  db.exec('PRAGMA foreign_keys = ON');
 
-  await run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS admins (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -74,7 +101,7 @@ async function migrate() {
     )
   `);
 
-  await run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       token_hash TEXT PRIMARY KEY,
       admin_id INTEGER NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
@@ -86,7 +113,7 @@ async function migrate() {
     )
   `);
 
-  await run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS audit_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       timestamp TEXT NOT NULL,
@@ -101,8 +128,7 @@ async function migrate() {
     )
   `);
 
-  // Legacy installations may already have incident_logs with a smaller schema.
-  await run(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS incident_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       timestamp TEXT NOT NULL,
@@ -120,31 +146,34 @@ async function migrate() {
     )
   `);
 
-  await addColumn('incident_logs', 'timestamp', 'TEXT');
-  await addColumn('incident_logs', 'details', 'TEXT');
-  await addColumn('incident_logs', 'severity', "TEXT NOT NULL DEFAULT 'WARNING'");
-  await addColumn('incident_logs', 'magnitude', 'REAL');
-  await addColumn('incident_logs', 'accel_x', 'REAL');
-  await addColumn('incident_logs', 'accel_y', 'REAL');
-  await addColumn('incident_logs', 'accel_z', 'REAL');
-  await addColumn('incident_logs', 'temp', 'REAL');
-  await addColumn('incident_logs', 'gas', 'INTEGER');
-  await addColumn('incident_logs', 'bpm', 'INTEGER');
-  await addColumn('incident_logs', 'source', "TEXT NOT NULL DEFAULT 'ESP32'");
+  // Legacy installations may already have a smaller incident_logs schema.
+  addColumn('incident_logs', 'timestamp', 'TEXT');
+  addColumn('incident_logs', 'details', 'TEXT');
+  addColumn('incident_logs', 'severity', "TEXT NOT NULL DEFAULT 'WARNING'");
+  addColumn('incident_logs', 'magnitude', 'REAL');
+  addColumn('incident_logs', 'accel_x', 'REAL');
+  addColumn('incident_logs', 'accel_y', 'REAL');
+  addColumn('incident_logs', 'accel_z', 'REAL');
+  addColumn('incident_logs', 'temp', 'REAL');
+  addColumn('incident_logs', 'gas', 'INTEGER');
+  addColumn('incident_logs', 'bpm', 'INTEGER');
+  addColumn('incident_logs', 'source', "TEXT NOT NULL DEFAULT 'ESP32'");
 
-  await run(`UPDATE incident_logs SET severity = 'WARNING' WHERE severity IS NULL OR severity = ''`);
-  await run(`UPDATE incident_logs SET source = 'ESP32' WHERE source IS NULL OR source = ''`);
+  db.exec("UPDATE incident_logs SET severity = 'WARNING' WHERE severity IS NULL OR severity = ''");
+  db.exec("UPDATE incident_logs SET source = 'ESP32' WHERE source IS NULL OR source = ''");
 
-  await run('CREATE INDEX IF NOT EXISTS idx_incidents_time ON incident_logs (timestamp DESC)');
-  await run('CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_logs (timestamp DESC)');
-  await run('CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions (expires_at)');
-  await run('CREATE INDEX IF NOT EXISTS idx_incidents_event ON incident_logs (event_type)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_incidents_time ON incident_logs (timestamp DESC)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_logs (timestamp DESC)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions (expires_at)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_incidents_event ON incident_logs (event_type)');
 }
 
+let migrated = false;
+
 async function init() {
-  await opened;
-  db.configure('busyTimeout', 5000);
-  await migrate();
+  if (migrated) return;
+  migrate();
+  migrated = true;
 }
 
 async function writeAudit(entry) {
@@ -161,12 +190,14 @@ async function writeAudit(entry) {
   };
 
   try {
-    const result = await run(
+    const result = run(
       `INSERT INTO audit_logs (timestamp, actor, role, category, action, outcome, detail, ip, user_agent)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [row.timestamp, row.actor, row.role, row.category, row.action, row.outcome, row.detail, row.ip, row.user_agent]
     );
-    const stored = await get('SELECT * FROM audit_logs WHERE id = ?', [result.lastID]);
+    const stored = result.lastID
+      ? get('SELECT * FROM audit_logs WHERE id = ?', [result.lastID])
+      : null;
     events.emit('audit', stored);
     return stored;
   } catch (err) {
@@ -177,7 +208,7 @@ async function writeAudit(entry) {
 
 async function recordIncident(incident) {
   const timestamp = incident.timestamp || new Date().toISOString();
-  const result = await run(
+  const result = run(
     `INSERT INTO incident_logs
       (timestamp, event_type, details, severity, magnitude, accel_x, accel_y, accel_z, temp, gas, bpm, source)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -196,11 +227,16 @@ async function recordIncident(incident) {
       incident.source || 'ESP32',
     ]
   );
-  return get('SELECT * FROM incident_logs WHERE id = ?', [result.lastID]);
+  return result.lastID ? get('SELECT * FROM incident_logs WHERE id = ?', [result.lastID]) : null;
 }
 
 function close() {
-  return new Promise((resolve) => db.close(() => resolve()));
+  try {
+    db.close();
+  } catch (err) {
+    console.error('[DB] Close failed:', err.message);
+  }
+  return Promise.resolve();
 }
 
 module.exports = {
