@@ -3,7 +3,10 @@ services:
     name: worker-safetyapp
     runtime: node
     plan: free
-    buildCommand: npm ci --omit=dev
+    # --omit=optional skips serialport (a hardware-only dependency that
+    # node-gyp-build would otherwise compile on the host). The app degrades to
+    # simulator mode automatically when the driver is absent.
+    buildCommand: npm ci --omit=dev --omit=optional
     startCommand: node server.js
     healthCheckPath: /api/health
     autoDeploy: true

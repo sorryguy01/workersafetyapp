@@ -189,7 +189,7 @@ The repo ships a `render.yaml` Blueprint, so a deploy is one click:
 
 1. Open `https://render.com/deploy?repo=https://github.com/sorryguy01/workersafetyapp`
 2. Approve the Blueprint, then type values for `SEED_ADMIN_PASSWORD` and `SEED_OBSERVER_PASSWORD` when prompted.
-3. Render builds with `npm ci --omit=dev`, starts with `node server.js`, and health-checks `/api/health`.
+3. Render builds with `npm ci --omit=dev --omit=optional`, starts with `node server.js`, and health-checks `/api/health`. `--omit=optional` skips `serialport`, so the build host never runs `node-gyp`; the app falls back to simulator mode on its own.
 
 The Blueprint pins `NODE_VERSION=24`. The app stores data through Node's built-in `node:sqlite`
 module, which is compiled into the Node binary itself — there is **no** native npm package to build,
