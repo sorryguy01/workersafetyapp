@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+# Production logs and runtime files
+safety_logs.db
+safety_logs.db-shm
+safety_logs.db-wal
+server.pid
+*.log
+# Environment variables (never commit real secrets)
+.env*
+# Screenshots (local only)
+screenshots/*
+# Build artifacts
+*.db-wal
+*.db-shm
