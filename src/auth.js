@@ -307,9 +307,26 @@ function requireCsrf(req, res, next) {
 function requireSameOrigin(req, res, next) {
   const origin = req.get('origin');
   if (!origin) return next();
+
+  /* Compare the Origin *host* against the request Host, not the full origin
+   * string. TLS normally terminates at a reverse proxy (Render, Heroku, Fly,
+   * Cloudflare), so req.protocol still reads "http" unless TRUST_PROXY is set
+   * correctly — comparing `${req.protocol}://${host}` then rejects the
+   * browser's legitimate `https://same-host` Origin. A cross-site attacker can
+   * never make their Origin host equal ours, so host equality is the check
+   * that actually matters here (defence in depth behind the SameSite=Lax
+   * session cookie). */
+  const host = (req.get('host') || '').toLowerCase();
+  let originHost = null;
   try {
-    const expected = `${req.protocol}://${req.get('host')}`;
-    if (origin === expected) return next();
+    originHost = new URL(origin).host.toLowerCase();
+  } catch {
+    originHost = null;
+  }
+
+  if (host && originHost && originHost === host) return next();
+
+  try {
     db.writeAudit({
       actor: req.user?.username || 'UNKNOWN',
       role: req.user?.role || null,
@@ -320,10 +337,10 @@ function requireSameOrigin(req, res, next) {
       ip: req.ip || req.socket?.remoteAddress || 'unknown',
       userAgent: (req.get('user-agent') || '').slice(0, 300),
     }).catch(() => {});
-    return res.status(403).json({ error: 'Cross-origin request blocked.' });
   } catch {
-    return res.status(403).json({ error: 'Cross-origin request blocked.' });
+    /* never let audit failures change the outcome of the check */
   }
+  return res.status(403).json({ error: 'Cross-origin request blocked.' });
 }
 
 function startSessionCleanup() {
