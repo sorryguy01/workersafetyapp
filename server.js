@@ -35,33 +35,47 @@ app.use(limiter);
 /* Security headers                                                           */
 /* -------------------------------------------------------------------------- */
 
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+
 app.use((req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
   if (req.path.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store');
-  res.setHeader(
-    'Content-Security-Policy',
-    [
-      "default-src 'self'",
-      "script-src 'self'",
-      "style-src 'self' 'unsafe-inline'",
-      "font-src 'self' https://fonts.gstatic.com data:",
-      "img-src 'self' data:",
-      "connect-src 'self' ws: wss: https://cdn.tailwindcss.com",
-      "frame-ancestors 'none'",
-      "base-uri 'self'",
-      "form-action 'self'",
-      "object-src 'none'",
-    ].join('; ')
-  );
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
   next();
 });
 
+/* Single source of truth for the CSP: helmet owns the header. The browser
+ * bundle is served from /js so inline scripts are not required; the only
+ * external origins are the Tailwind Play CDN, Chart.js (jsDelivr) and the
+ * Google Fonts stylesheet/webfonts the design uses. */
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", 'https://cdn.tailwindcss.com', 'https://cdn.jsdelivr.net'],
+        scriptSrcAttr: ["'none'"],
+        styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+        fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
+        imgSrc: ["'self'", 'data:'],
+        connectSrc: ["'self'", 'ws:', 'wss:'],
+        objectSrc: ["'none'"],
+        baseUri: ["'self'"],
+        formAction: ["'self'"],
+        frameAncestors: ["'none'"],
+        ...(IS_PRODUCTION ? { upgradeInsecureRequests: [] } : {}),
+      },
+    },
+    // Not needed: this app has no cross-origin isolated features, and
+    // require-corp would block the CDN stylesheet/script responses.
+    crossOriginEmbedderPolicy: false,
+    crossOriginOpenerPolicy: { policy: 'same-origin' },
+    frameguard: { action: 'deny' },
+    referrerPolicy: { policy: 'no-referrer' },
+  })
+);
+
 app.use(express.json({ limit: '500kb' }));
-app.use(helmet());
 app.use(
   express.static(path.join(__dirname, 'public'), {
     etag: true,

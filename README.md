@@ -95,7 +95,10 @@ WorkerSafetyApp/
 │   ├── auth.js             Scrypt login, sessions, CSRF, RBAC middleware, lockout
 │   ├── security.js         Crypto primitives (scrypt, random tokens, timing-safe eq)
 │   └── telemetry.js        Serial bridge, simulator, POST sequence, incident detection
-├── public/index.html       Single-page dashboard (Tailwind CDN + Chart.js + Socket.IO)
+├── public/index.html       Single-page dashboard shell + styles (strict-CSP, no inline JS)
+├── public/js/app.js        Dashboard client: login, Socket.IO, charts, REST calls
+├── public/js/theme-boot.js Pre-paint theme bootstrap
+├── public/js/tailwind.config.js  Tailwind Play CDN theme tokens
 ├── scripts/set-password.js Credential rotation CLI
 ├── safety_logs.db          SQLite database (created on first boot)
 └── package.json
