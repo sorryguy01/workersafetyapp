@@ -424,7 +424,7 @@ function setStatus(next) {
   setText(
     'connSub',
     simulation
-      ? `${linkLabel} · synthetic stream`
+      ? `${linkLabel || 'Virtual node'} · synthetic stream`
       : online
         ? (state.firebaseOnline ? 'Firebase · real-time' : httpUp ? 'HTTP · real-time' : `${linkLabel} · ${linkRate} baud`)
         : state.status.lastError
