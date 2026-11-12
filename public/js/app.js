@@ -413,8 +413,9 @@ function setStatus(next) {
   // badge stuck ONLINE after the feed stops.
   const simulation = state.firebaseOnline ? false : Boolean(state.status.simulation);
   const online = state.firebaseOnline ? true : Boolean(state.status.connected);
-  const linkLabel = state.firebaseOnline ? 'Firebase' : state.status.port;
-  const linkRate = state.firebaseOnline ? 'real-time' : state.status.baud;
+  const httpUp = Boolean(state.status.httpConnected);
+  const linkLabel = state.firebaseOnline ? 'Firebase' : httpUp ? 'HTTP' : state.status.port;
+  const linkRate = state.firebaseOnline || httpUp ? 'real-time' : state.status.baud;
   const mode = simulation ? 'SIMULATION MODE' : online ? 'ESP32 ONLINE' : 'ESP32 OFFLINE';
 
   const badge = $('#connBadge');
@@ -425,7 +426,7 @@ function setStatus(next) {
     simulation
       ? `${linkLabel} · synthetic stream`
       : online
-        ? (state.firebaseOnline ? 'Firebase · real-time' : `${linkLabel} · ${linkRate} baud`)
+        ? (state.firebaseOnline ? 'Firebase · real-time' : httpUp ? 'HTTP · real-time' : `${linkLabel} · ${linkRate} baud`)
         : state.status.lastError
           ? 'serial link lost'
           : 'unplugged · awaiting link'

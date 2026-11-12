@@ -44,7 +44,9 @@ function classifyLine(line) {
 class TelemetryHub extends EventEmitter {
   constructor() {
     super();
-    this.portPath = process.env.SERIAL_PORT || 'COM6';
+    // An empty SERIAL_PORT means "no serial hardware" (e.g. on a host), so
+    // only fall back to the Windows default when the variable is unset.
+    this.portPath = process.env.SERIAL_PORT ?? 'COM6';
     this.baudRate = Number(process.env.SERIAL_BAUD || 115200);
     this.startedAt = Date.now();
     this.connected = false;
@@ -189,6 +191,13 @@ class TelemetryHub extends EventEmitter {
   /* ------------------------------------------------------------------ */
 
   async attemptSerial() {
+    if (!this.portPath) {
+      if (!this.serialAttemptedLogged) {
+        this.log('[SERIAL] Disabled — no SERIAL_PORT configured for this host', 'INFO');
+        this.serialAttemptedLogged = true;
+      }
+      return false;
+    }
     if (this.connecting || (this.port && this.port.isOpen)) return this.connected;
     this.connecting = true;
     this.serialAttempted = true;
@@ -276,7 +285,7 @@ class TelemetryHub extends EventEmitter {
   }
 
   scheduleSerialRetry() {
-    if (this.serialRetry) return;
+    if (!this.portPath || this.serialRetry) return;
     this.serialRetry = setTimeout(async () => {
       this.serialRetry = null;
       if (this.port && this.port.isOpen) return;
