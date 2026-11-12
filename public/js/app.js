@@ -403,20 +403,18 @@ function setStatus(next) {
   if (!next) return;
   state.statusReady = true;
   state.status = { ...state.status, ...next };
-  if (state.firebaseOnline) {
-    state.status.simulation = false;
-    state.status.connected = true;
-    state.status.port = 'Firebase';
-    state.status.baud = 'real-time';
-  }
   if (next.thresholds) state.thresholds = { ...state.thresholds, ...next.thresholds };
   if (typeof next.uptime === 'number') {
     state.uptimeBase = next.uptime;
     state.uptimeAt = Date.now();
   }
 
-  const simulation = Boolean(state.status.simulation);
-  const online = Boolean(state.status.connected);
+  // Firebase is an overlay: persisting it into state.status would leave the
+  // badge stuck ONLINE after the feed stops.
+  const simulation = state.firebaseOnline ? false : Boolean(state.status.simulation);
+  const online = state.firebaseOnline ? true : Boolean(state.status.connected);
+  const linkLabel = state.firebaseOnline ? 'Firebase' : state.status.port;
+  const linkRate = state.firebaseOnline ? 'real-time' : state.status.baud;
   const mode = simulation ? 'SIMULATION MODE' : online ? 'ESP32 ONLINE' : 'ESP32 OFFLINE';
 
   const badge = $('#connBadge');
@@ -425,9 +423,9 @@ function setStatus(next) {
   setText(
     'connSub',
     simulation
-      ? `${state.status.port} · synthetic stream`
+      ? `${linkLabel} · synthetic stream`
       : online
-        ? (state.status.port === 'Firebase' ? 'Firebase · real-time' : `${state.status.port} · ${state.status.baud} baud`)
+        ? (state.firebaseOnline ? 'Firebase · real-time' : `${linkLabel} · ${linkRate} baud`)
         : state.status.lastError
           ? 'serial link lost'
           : 'unplugged · awaiting link'
@@ -1353,7 +1351,6 @@ function connectSocket() {
 /* Firebase Realtime Database — direct ESP32 → website data feed        */
 /* ------------------------------------------------------------------ */
 function initFirebase() {
-  // Replace with your Firebase project config
   const firebaseConfig = {
     apiKey: "AIzaSyBRfvxEl_R7_w-ILWU40NIzJWK0v1jkJC0",
     authDomain: "worker-safety-telemetry.firebaseapp.com",
@@ -1373,16 +1370,35 @@ function initFirebase() {
     if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
     const telemetryRef = db.ref('telemetry');
+    const STALE_MS = 15000;
+    let watchdog = null;
 
     telemetryRef.on('value', (snapshot) => {
       const data = snapshot.val();
-      if (!data) return;
-      // Convert Firebase payload to dashboard format
+      clearTimeout(watchdog);
+
+      if (!data) {
+        state.firebaseOnline = false;
+        if (state.status) setStatus(state.status);
+        return;
+      }
+
+      // The ESP32 stamps each frame; a frame older than STALE_MS means the
+      // board stopped, so a fresh page load must not present it as live.
+      const stamp = typeof data.ts === 'number' ? data.ts : null;
+      const stale = stamp !== null && Date.now() - stamp > STALE_MS;
+
+      if (stale) {
+        state.firebaseOnline = false;
+        if (state.status) setStatus(state.status);
+        return;
+      }
+
       const payload = {
         x: data.x, y: data.y, z: data.z,
         gx: data.gx, gy: data.gy, gz: data.gz,
-        magnitude: Math.sqrt((data.x||0)**2 + (data.y||0)**2 + (data.z||0)**2),
-        gyroMag: Math.sqrt((data.gx||0)**2 + (data.gy||0)**2 + (data.gz||0)**2),
+        magnitude: Math.sqrt((data.x || 0) ** 2 + (data.y || 0) ** 2 + (data.z || 0) ** 2),
+        gyroMag: Math.sqrt((data.gx || 0) ** 2 + (data.gy || 0) ** 2 + (data.gz || 0) ** 2),
         temp: data.temp, hum: data.hum, gas: data.gas,
         bpm: data.bpm, flame: data.flame, sos: data.sos,
         buzzer: false, source: 'ESP32-Firebase',
@@ -1391,20 +1407,15 @@ function initFirebase() {
       };
       handleTelemetry(payload);
 
-      // Update connection status
       state.firebaseOnline = true;
       if (!state.status) state.status = {};
       setStatus(state.status);
-    });
 
-    // Watchdog: if no data for 10s, mark offline
-    let watchdog = null;
-    telemetryRef.on('value', () => {
-      clearTimeout(watchdog);
+      // No further frames within the window -> the link dropped.
       watchdog = setTimeout(() => {
         state.firebaseOnline = false;
         if (state.status) setStatus(state.status);
-      }, 10000);
+      }, STALE_MS);
     });
 
     console.log('[Firebase] Real-time telemetry listener active.');

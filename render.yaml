@@ -30,7 +30,7 @@ services:
       - key: TRUST_PROXY
         value: "true"
       - key: SIM_AUTO_DEMO
-        value: "true"
+        value: "false"
       # Prompts for a value on first deploy; never committed to the repo.
       - key: SEED_ADMIN_PASSWORD
         sync: false

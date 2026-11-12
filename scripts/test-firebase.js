@@ -36,6 +36,7 @@ const frame = {
   bpm: 78,
   flame: 0,
   sos: 0,
+  ts: Date.now(),
 };
 
 const url =
