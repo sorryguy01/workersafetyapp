@@ -48,6 +48,7 @@ class TelemetryHub extends EventEmitter {
     this.baudRate = Number(process.env.SERIAL_BAUD || 115200);
     this.startedAt = Date.now();
     this.connected = false;
+    this.httpConnected = false;
     this.streaming = false;
     this.simulation = false;
     this.simulationAuto = false;
@@ -107,8 +108,9 @@ class TelemetryHub extends EventEmitter {
 
   statusSnapshot() {
     return {
-      connected: Boolean(this.connected && this.streaming),
+      connected: Boolean((this.connected || this.httpConnected) && this.streaming),
       serialConnected: Boolean(this.connected),
+      httpConnected: Boolean(this.httpConnected),
       simulation: this.simulation,
       simulationAuto: this.simulationAuto,
       port: this.portPath,
@@ -413,13 +415,34 @@ class TelemetryHub extends EventEmitter {
 
     this.lastSample = payload;
     this.lastSampleAt = Date.now();
-    if (this.port && this.port.isOpen && !this.streaming) {
+    if (!this.streaming) {
       this.streaming = true;
       this.emitStatus();
     }
 
     this.emit('telemetry', payload);
     this.evaluate(payload);
+  }
+
+  markHttpConnected() {
+    this.httpConnected = true;
+    if (!this.connected && this.simulation && this.simulationAuto) {
+      this.setSimulation(false, { reason: 'ESP32 HTTP telemetry detected — simulation disabled' });
+    }
+    if (!this.streaming) {
+      this.streaming = true;
+      this.emitStatus();
+    }
+    clearTimeout(this.httpWatchdog);
+    this.httpWatchdog = setTimeout(() => {
+      this.httpConnected = false;
+      if (!this.connected) {
+        this.streaming = false;
+        this.emitStatus();
+        this.log('[HTTP] ESP32 telemetry stalled — no data for 10s', 'WARN');
+      }
+    }, 10000);
+    this.httpWatchdog.unref?.();
   }
 
   evaluate(sample) {

@@ -188,6 +188,63 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', service: 'worker-safety-telemetry', serverTime: new Date().toISOString() });
 });
 
+
+/* -------------------------------------------------------------------------- */
+/* ESP32 HTTP telemetry ingestion (WiFi → Render)                             */
+/* -------------------------------------------------------------------------- */
+
+app.post('/api/telemetry', (req, res) => {
+  // Optional API key check (set ESP32_API_KEY in .env for production)
+  const apiKey = process.env.ESP32_API_KEY;
+  if (apiKey) {
+    const provided = req.get('x-api-key') || req.get('authorization')?.replace('Bearer ', '');
+    if (provided !== apiKey) {
+      return res.status(401).json({ error: 'Invalid or missing API key.' });
+    }
+  }
+
+  const body = req.body || {};
+  // Accept JSON with field names matching the dashboard's expected format
+  const sample = {
+    x: body.x ?? body.ax,
+    y: body.y ?? body.ay,
+    z: body.z ?? body.az,
+    gx: body.gx,
+    gy: body.gy,
+    gz: body.gz,
+    temp: body.temp,
+    hum: body.hum,
+    gas: body.gas,
+    bpm: body.bpm,
+    flame: body.flame,
+    sos: body.sos,
+  };
+
+  // Also accept raw CSV string in body.csv
+  if (body.csv && typeof body.csv === 'string') {
+    const parts = body.csv.split(',').map((s) => s.trim());
+    if (parts.length === 12 || parts.length === 9) {
+      const parsed = parts.length === 12
+        ? { x: parts[0], y: parts[1], z: parts[2], gx: parts[3], gy: parts[4], gz: parts[5], temp: parts[6], hum: parts[7], gas: parts[8], bpm: parts[9], flame: parts[10], sos: parts[11] }
+        : { x: parts[0], y: parts[1], z: parts[2], temp: parts[3], hum: parts[4], gas: parts[5], bpm: parts[6], flame: parts[7], sos: parts[8] };
+      Object.assign(sample, parsed);
+    }
+  }
+
+  if (sample.x === undefined || sample.x === null) {
+    return res.status(400).json({ error: 'Missing telemetry fields (x/ax required).' });
+  }
+
+  try {
+    hub.markHttpConnected();
+    hub.ingest(sample, 'ESP32-HTTP');
+    res.json({ ok: true, packets: hub.packets });
+  } catch (err) {
+    console.error('[HTTP] Telemetry ingestion error:', err.message);
+    res.status(500).json({ error: 'Ingestion failed.' });
+  }
+});
+
 /* -------------------------------------------------------------------------- */
 /* Administrator control endpoint (role + CSRF enforced)                      */
 /* -------------------------------------------------------------------------- */
