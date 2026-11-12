@@ -496,6 +496,10 @@ function resetDashboard() {
 /* ------------------------------------------------------------------ */
 /* Industrial safety state                                            */
 /* ------------------------------------------------------------------ */
+// One window for both the Firebase badge and the safety panel, so a board that
+// posts every few seconds cannot read ONLINE while the panel says DATA STALE.
+const FRAME_STALE_MS = 15000;
+
 function computeHazards(d) {
   const t = state.thresholds;
   const hazards = [];
@@ -503,6 +507,7 @@ function computeHazards(d) {
   const mag = Number(d.magnitude);
   const gyro = Number(d.gyroMag);
   const temp = Number(d.temp);
+  const hum = Number(d.hum);
   const gas = Number(d.gas);
   const bpm = Number(d.bpm);
 
@@ -516,6 +521,12 @@ function computeHazards(d) {
   }
   if (Number.isFinite(gyro) && gyro > Number(t.gyro)) add('ROTATION', 'VIOLENT ROTATION', `${gyro.toFixed(0)} °/s`, 'warning');
 
+  // A dead channel is a safety condition in itself: those risks go unmonitored.
+  if (!(Number.isFinite(mag) && mag > 1)) add('IMU_FAULT', 'IMU FAULT', 'NO MOTION DATA', 'warning');
+  if (!(temp > 0 && temp < 125)) add('TEMP_FAULT', 'TEMP SENSOR FAULT', 'NO READING', 'warning');
+  if (!(Number.isFinite(hum) && hum > 0 && hum <= 100)) add('HUM_FAULT', 'HUMIDITY SENSOR FAULT', 'NO READING', 'warning');
+  if (!(Number.isFinite(gas) && gas > 0)) add('GAS_FAULT', 'GAS SENSOR FAULT', 'NO READING', 'warning');
+
   return hazards.sort((a, b) => (a.severity === 'critical' ? 0 : 1) - (b.severity === 'critical' ? 0 : 1));
 }
 
@@ -526,8 +537,10 @@ function renderSafetyState() {
   const now = Date.now();
   const hasFrame = Boolean(state.lastTelemetryAt && state.latest);
   const age = hasFrame ? Math.floor((now - state.lastTelemetryAt) / 1000) : null;
-  const fresh = hasFrame && now - state.lastTelemetryAt < 5000;
-  const linkLive = state.statusReady ? Boolean(state.status.simulation || state.status.connected) : fresh;
+  const fresh = hasFrame && now - state.lastTelemetryAt < FRAME_STALE_MS;
+  // The Firebase feed is a first-class source: without this the panel claimed
+  // "serial uplink offline" while real frames were arriving over Firebase.
+  const linkLive = state.firebaseOnline || (state.statusReady ? Boolean(state.status.simulation || state.status.connected) : fresh);
 
   let level = 'idle';
   let label = 'STANDBY';
@@ -637,10 +650,13 @@ function renderTelemetry() {
   setAxisFill($('#barX'), d.x, 30);
   setAxisFill($('#barY'), d.y, 30);
   setAxisFill($('#barZ'), d.z, 30);
-  const impact = d.magnitude > thresholds.impact;
-  $('#cardAccel').classList.toggle('alert', impact);
-  setChip('accelState', impact ? 'IMPACT' : 'NOMINAL', impact ? 'alert' : 'ok');
-  setText('accelHint', impact ? `FALL > ${thresholds.impact.toFixed(1)} m/s²` : 'WITHIN SAFE ENVELOPE');
+  // A resting IMU always reports ~9.8 m/s² of gravity, so a near-zero
+  // resultant means the sensor is absent, not that the worker is motionless.
+  const imuOk = Number.isFinite(Number(d.magnitude)) && Number(d.magnitude) > 1;
+  const impact = imuOk && d.magnitude > thresholds.impact;
+  $('#cardAccel').classList.toggle('alert', impact || !imuOk);
+  setChip('accelState', !imuOk ? 'NO DATA' : impact ? 'IMPACT' : 'NOMINAL', !imuOk ? 'warn' : impact ? 'alert' : 'ok');
+  setText('accelHint', !imuOk ? 'IMU NOT RESPONDING' : impact ? `FALL > ${thresholds.impact.toFixed(1)} m/s²` : 'WITHIN SAFE ENVELOPE');
 
   // Gyroscope
   setText('gyroMag', Number(d.gyroMag || 0).toFixed(0));
@@ -651,9 +667,9 @@ function renderTelemetry() {
   setAxisFill($('#barRoll'), d.gx, 180);
   setAxisFill($('#barPitch'), d.gy, 180);
   setAxisFill($('#barYaw'), d.gz, 180);
-  const spin = d.gyroMag > thresholds.gyro;
-  setChip('gyroState', spin ? 'HIGH ROT' : 'NOMINAL', spin ? 'warn' : 'ok');
-  setText('gyroHint', spin ? 'VIOLENT ROTATION DETECTED' : 'STABLE ORIENTATION');
+  const spin = imuOk && d.gyroMag > thresholds.gyro;
+  setChip('gyroState', !imuOk ? 'NO DATA' : spin ? 'HIGH ROT' : 'NOMINAL', !imuOk ? 'warn' : spin ? 'warn' : 'ok');
+  setText('gyroHint', !imuOk ? 'IMU NOT RESPONDING' : spin ? 'VIOLENT ROTATION DETECTED' : 'STABLE ORIENTATION');
 
   // Vitals
   const bpm = Math.round(Number(d.bpm) || 0);
@@ -689,29 +705,35 @@ function renderTelemetry() {
 
   // Temperature
   const temp = Number(d.temp);
-  setText('tempVal', Number.isFinite(temp) ? temp.toFixed(1) : '--');
-  setBar($('#tempBar'), (temp / 60) * 100);
-  const tempTone = temp > thresholds.temp ? 'alert' : temp > 38 ? 'warn' : 'ok';
-  setChip('tempState', temp > thresholds.temp ? 'HEAT STRESS' : temp > 38 ? 'ELEVATED' : 'NORMAL', tempTone);
-  setText('tempHint', temp > thresholds.temp ? 'ABOVE LIMIT' : 'NOMINAL');
-  $('#cardTemp').classList.toggle('alert', temp > thresholds.temp);
+  // A DHT11 that is unplugged reports 0 °C, which must never read as NOMINAL.
+  const tempOk = Number.isFinite(temp) && temp > 0 && temp < 125;
+  setText('tempVal', tempOk ? temp.toFixed(1) : '--');
+  setBar($('#tempBar'), tempOk ? (temp / 60) * 100 : 0);
+  const tempTone = !tempOk ? 'warn' : temp > thresholds.temp ? 'alert' : temp > 38 ? 'warn' : 'ok';
+  setChip('tempState', !tempOk ? 'SENSOR FAULT' : temp > thresholds.temp ? 'HEAT STRESS' : temp > 38 ? 'ELEVATED' : 'NORMAL', tempTone);
+  setText('tempHint', !tempOk ? 'NO READING FROM DHT11' : temp > thresholds.temp ? 'ABOVE LIMIT' : 'NOMINAL');
+  $('#cardTemp').classList.toggle('alert', !tempOk || temp > thresholds.temp);
 
   // Humidity
   const hum = Math.round(Number(d.hum));
-  setText('humVal', Number.isFinite(hum) ? String(hum) : '--');
-  setBar($('#humBar'), hum);
-  const humTone = hum < 30 ? 'warn' : hum > 70 ? 'warn' : 'ok';
-  setChip('humState', hum < 30 ? 'DRY' : hum > 70 ? 'HUMID' : 'NORMAL', humTone);
-  setText('humHint', hum < 30 ? 'LOW HUMIDITY' : hum > 70 ? 'HIGH HUMIDITY' : 'COMFORTABLE');
+  const humOk = Number.isFinite(hum) && hum > 0 && hum <= 100;
+  setText('humVal', humOk ? String(hum) : '--');
+  setBar($('#humBar'), humOk ? hum : 0);
+  const humTone = !humOk ? 'warn' : hum < 30 ? 'warn' : hum > 70 ? 'warn' : 'ok';
+  setChip('humState', !humOk ? 'SENSOR FAULT' : hum < 30 ? 'DRY' : hum > 70 ? 'HUMID' : 'NORMAL', humTone);
+  setText('humHint', !humOk ? 'NO READING FROM DHT11' : hum < 30 ? 'LOW HUMIDITY' : hum > 70 ? 'HIGH HUMIDITY' : 'COMFORTABLE');
 
   // Gas
   const gas = Math.round(Number(d.gas));
-  setText('gasVal', Number.isFinite(gas) ? String(gas) : '--');
-  setBar($('#gasBar'), (gas / 4095) * 100);
-  const gasHazard = gas > thresholds.gas;
-  $('#cardGas').classList.toggle('alert', gasHazard);
-  setChip('gasState', gasHazard ? 'HAZARD' : gas > 1000 ? 'ELEVATED' : 'CLEAN', gasHazard ? 'alert' : gas > 1000 ? 'warn' : 'ok');
-  setText('gasHint', gasHazard ? 'SMOKE / GAS DETECTED' : 'AIR QUALITY NOMINAL');
+  // An MQ-2 in clean air still sits well above zero; 0 means the ADC is not
+  // wired, so it must not be reported as clean air.
+  const gasOk = Number.isFinite(gas) && gas > 0;
+  setText('gasVal', gasOk ? String(gas) : '--');
+  setBar($('#gasBar'), gasOk ? (gas / 4095) * 100 : 0);
+  const gasHazard = gasOk && gas > thresholds.gas;
+  $('#cardGas').classList.toggle('alert', gasHazard || !gasOk);
+  setChip('gasState', !gasOk ? 'SENSOR FAULT' : gasHazard ? 'HAZARD' : gas > 1000 ? 'ELEVATED' : 'CLEAN', !gasOk ? 'warn' : gasHazard ? 'alert' : gas > 1000 ? 'warn' : 'ok');
+  setText('gasHint', !gasOk ? 'NO READING FROM MQ-2' : gasHazard ? 'SMOKE / GAS DETECTED' : 'AIR QUALITY NOMINAL');
 
   // Flame
   const fire = Number(d.flame) === 1;
@@ -1376,7 +1398,6 @@ function initFirebase() {
     if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
     const telemetryRef = db.ref('telemetry');
-    const STALE_MS = 15000;
     let watchdog = null;
 
     telemetryRef.on('value', (snapshot) => {
@@ -1392,7 +1413,7 @@ function initFirebase() {
       // The ESP32 stamps each frame; a frame older than STALE_MS means the
       // board stopped, so a fresh page load must not present it as live.
       const stamp = typeof data.ts === 'number' ? data.ts : null;
-      const stale = stamp !== null && Date.now() - stamp > STALE_MS;
+      const stale = stamp !== null && Date.now() - stamp > FRAME_STALE_MS;
 
       if (stale) {
         state.firebaseOnline = false;
@@ -1421,7 +1442,7 @@ function initFirebase() {
       watchdog = setTimeout(() => {
         state.firebaseOnline = false;
         if (state.status) setStatus(state.status);
-      }, STALE_MS);
+      }, FRAME_STALE_MS);
     });
 
     console.log('[Firebase] Real-time telemetry listener active.');

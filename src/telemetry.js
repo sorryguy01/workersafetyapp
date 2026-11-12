@@ -77,7 +77,9 @@ class TelemetryHub extends EventEmitter {
     };
     this.biosHistory = [];
     this.cooldowns = new Map();
-    this.autoDemo = process.env.SIM_AUTO_DEMO !== 'false';
+    // Opt-in only: a host with no sensors must not fabricate plausible
+    // readings (and fake incidents) on its own.
+    this.autoDemo = process.env.SIM_AUTO_DEMO === 'true';
     this.demoQueue = ['GAS', 'IMPACT', 'FIRE', 'HEAT', 'SOS', 'HR'];
     this.demoCursor = 0;
     this.nextDemoAt = Date.now() + 90_000;
