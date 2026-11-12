@@ -611,10 +611,15 @@ function handleTelemetry(payload) {
 function queueRender() {
   if (state.renderQueued) return;
   state.renderQueued = true;
-  requestAnimationFrame(() => {
+  const flush = () => {
+    if (!state.renderQueued) return;
     state.renderQueued = false;
     renderTelemetry();
-  });
+  };
+  requestAnimationFrame(flush);
+  // Chrome pauses animation frames in background tabs, which would leave the
+  // tiles frozen at old readings while the badge still updated.
+  setTimeout(flush, 300);
 }
 
 function renderTelemetry() {
