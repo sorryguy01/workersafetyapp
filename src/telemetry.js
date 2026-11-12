@@ -158,7 +158,7 @@ class TelemetryHub extends EventEmitter {
     this.simTimer.unref();
 
     await this.attemptSerial();
-    if (!this.connected && !this.simulation) {
+    if (!this.connected && !this.simulation && this.autoDemo) {
       this.setSimulation(true, {
         auto: true,
         reason: `No ESP32 telemetry link on ${this.portPath} — simulation fallback engaged`,

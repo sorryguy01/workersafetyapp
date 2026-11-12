@@ -77,6 +77,7 @@ const state = {
   commandHistory: [],
   historyIndex: -1,
   socketConnected: false,
+  firebaseOnline: false,
   spotlightFrame: 0,
   lastDrawerTrigger: null,
 };
@@ -402,6 +403,12 @@ function setStatus(next) {
   if (!next) return;
   state.statusReady = true;
   state.status = { ...state.status, ...next };
+  if (state.firebaseOnline) {
+    state.status.simulation = false;
+    state.status.connected = true;
+    state.status.port = 'Firebase';
+    state.status.baud = 'real-time';
+  }
   if (next.thresholds) state.thresholds = { ...state.thresholds, ...next.thresholds };
   if (typeof next.uptime === 'number') {
     state.uptimeBase = next.uptime;
@@ -420,7 +427,7 @@ function setStatus(next) {
     simulation
       ? `${state.status.port} · synthetic stream`
       : online
-        ? `${state.status.port} · ${state.status.baud} baud`
+        ? (state.status.port === 'Firebase' ? 'Firebase · real-time' : `${state.status.port} · ${state.status.baud} baud`)
         : state.status.lastError
           ? 'serial link lost'
           : 'unplugged · awaiting link'
@@ -594,6 +601,8 @@ function renderSafetyState() {
 /* ------------------------------------------------------------------ */
 function handleTelemetry(payload) {
   if (!payload) return;
+  // Firebase carries real hardware data; ignore server/synthetic frames meanwhile
+  if (state.firebaseOnline && payload.source !== 'ESP32-Firebase') return;
   state.latest = payload;
   state.lastTelemetryAt = Date.now();
   if (typeof payload.seq === 'number') setText('pktCount', String(payload.seq));
@@ -1383,11 +1392,8 @@ function initFirebase() {
       handleTelemetry(payload);
 
       // Update connection status
+      state.firebaseOnline = true;
       if (!state.status) state.status = {};
-      state.status.connected = true;
-      state.status.simulation = false;
-      state.status.port = 'Firebase';
-      state.status.baud = 'real-time';
       setStatus(state.status);
     });
 
@@ -1396,10 +1402,8 @@ function initFirebase() {
     telemetryRef.on('value', () => {
       clearTimeout(watchdog);
       watchdog = setTimeout(() => {
-        if (state.status) {
-          state.status.connected = false;
-          setStatus(state.status);
-        }
+        state.firebaseOnline = false;
+        if (state.status) setStatus(state.status);
       }, 10000);
     });
 
