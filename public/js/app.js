@@ -1341,6 +1341,83 @@ function connectSocket() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Firebase Realtime Database — direct ESP32 → website data feed        */
+/* ------------------------------------------------------------------ */
+function initFirebase() {
+  // Replace with your Firebase project config
+  const firebaseConfig = {
+    apiKey: "AIzaSyBRfvxEl_R7_w-ILWU40NIzJWK0v1jkJC0",
+    authDomain: "worker-safety-telemetry.firebaseapp.com",
+    databaseURL: "https://worker-safety-telemetry-default-rtdb.firebaseio.com",
+    projectId: "worker-safety-telemetry",
+    storageBucket: "worker-safety-telemetry.firebasestorage.app",
+    messagingSenderId: "1099212884764",
+    appId: "1:1099212884764:web:d6801d97d24470bfac48d9"
+  };
+
+  if (typeof firebase === 'undefined') {
+    console.warn('[Firebase] SDK not loaded — skipping real-time feed.');
+    return;
+  }
+
+  try {
+    if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+    const telemetryRef = db.ref('telemetry');
+
+    telemetryRef.on('value', (snapshot) => {
+      const data = snapshot.val();
+      if (!data) return;
+      // Convert Firebase payload to dashboard format
+      const payload = {
+        x: data.x, y: data.y, z: data.z,
+        gx: data.gx, gy: data.gy, gz: data.gz,
+        magnitude: Math.sqrt((data.x||0)**2 + (data.y||0)**2 + (data.z||0)**2),
+        gyroMag: Math.sqrt((data.gx||0)**2 + (data.gy||0)**2 + (data.gz||0)**2),
+        temp: data.temp, hum: data.hum, gas: data.gas,
+        bpm: data.bpm, flame: data.flame, sos: data.sos,
+        buzzer: false, source: 'ESP32-Firebase',
+        seq: (state.latest?.seq || 0) + 1,
+        ts: new Date().toISOString(),
+      };
+      handleTelemetry(payload);
+
+      // Update connection status
+      if (!state.status) state.status = {};
+      state.status.connected = true;
+      state.status.simulation = false;
+      state.status.port = 'Firebase';
+      state.status.baud = 'real-time';
+      setStatus(state.status);
+    });
+
+    // Watchdog: if no data for 10s, mark offline
+    let watchdog = null;
+    telemetryRef.on('value', () => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => {
+        if (state.status) {
+          state.status.connected = false;
+          setStatus(state.status);
+        }
+      }, 10000);
+    });
+
+    console.log('[Firebase] Real-time telemetry listener active.');
+  } catch (err) {
+    console.error('[Firebase] Init failed:', err.message);
+  }
+}
+
+// Start Firebase after page load
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initFirebase);
+} else {
+  initFirebase();
+}
+
+
+/* ------------------------------------------------------------------ */
 /* Clock, uptime & event wiring                                       */
 /* ------------------------------------------------------------------ */
 function tickMeta() {
